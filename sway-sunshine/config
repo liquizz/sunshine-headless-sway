@@ -1,8 +1,9 @@
 # Headless Sway session for Sunshine streaming
 # No physical display needed - uses WLR_BACKENDS=headless
 
-# Default headless output - 1080p fallback, Sunshine prep commands override this
-output HEADLESS-1 resolution 1920x1080@60Hz
+# Steam Deck OLED native size/refresh. Sunshine prep commands adapt this to the
+# Moonlight client's requested mode while a stream is active.
+output HEADLESS-1 resolution 1280x800@90Hz
 
 # Performance tuning
 output * allow_tearing yes
@@ -20,6 +21,7 @@ input "48879:57005:Mouse_passthrough_(absolute)" events enabled
 input "48879:57005:Touch_passthrough" events enabled
 input "48879:57005:Pen_passthrough" events enabled
 input "1356:3302:Sunshine_PS5_(virtual)_pad_Touchpad" events enabled
+input "1118:2835:Sunshine_(libvirtualhid)_X-Box_Series_Controller" events enabled
 
 # Flat acceleration for mouse passthrough
 input "48879:57005:Mouse_passthrough" accel_profile flat

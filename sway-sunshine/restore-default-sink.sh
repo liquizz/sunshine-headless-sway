@@ -1,20 +1,33 @@
-#!/bin/bash
-# Restores the host's default audio sink after Sunshine changes it.
-# Sunshine sets audio_sink as the system default when a client connects.
-# Uses systemd-run to spawn a detached watcher that survives prep-cmd cleanup.
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Get the current default sink ID from wpctl
-# Format: " │  *   44. Komplete Audio 2 ..."
-SINK_ID=$(wpctl status 2>/dev/null | grep -A20 'Sinks:' | grep '\*' | head -1 | grep -oE '[0-9]+' | head -1)
+# Sunshine temporarily changes the PulseAudio/PipeWire default sink. Remember
+# the host's current sink and restore it once Sunshine selects the stream sink.
+sink_id="$(wpctl status 2>/dev/null | awk '
+  /Sinks:/ { in_sinks=1; next }
+  in_sinks && /Sources:/ { exit }
+  in_sinks && /\*/ {
+    if (match($0, /[0-9]+[.]/)) {
+      print substr($0, RSTART, RLENGTH-1)
+      exit
+    }
+  }
+')"
 
-if [ -z "$SINK_ID" ]; then
-    exit 0
-fi
+[[ "$sink_id" =~ ^[0-9]+$ ]] || exit 0
+systemctl --user stop sunshine-headless-sink-restore.service >/dev/null 2>&1 || true
+systemctl --user reset-failed sunshine-headless-sink-restore.service >/dev/null 2>&1 || true
 
-# Clean up any previous instance
-systemctl --user stop sunshine-sink-restore 2>/dev/null
-systemctl --user reset-failed sunshine-sink-restore 2>/dev/null
-
-# Launch a detached watcher via systemd-run (survives prep-cmd cleanup)
-systemd-run --user --no-block --unit=sunshine-sink-restore \
-    bash -c 'for i in $(seq 1 30); do sleep 1; CUR=$(wpctl status 2>/dev/null | grep -A20 "Sinks:" | grep "\*" | head -1 | grep -oE "[0-9]+" | head -1); if [ "$CUR" != "'"$SINK_ID"'" ] && [ -n "$CUR" ]; then wpctl set-default '"$SINK_ID"'; exit 0; fi; done'
+systemd-run --user --quiet --no-block \
+  --unit=sunshine-headless-sink-restore \
+  /usr/bin/bash -c '
+    original="$1"
+    for _ in {1..60}; do
+      sleep 1
+      current="$(wpctl status 2>/dev/null | awk "/Sinks:/ { in_sinks=1; next } in_sinks && /Sources:/ { exit } in_sinks && /\\*/ { if (match(\$0, /[0-9]+[.]/)) { print substr(\$0, RSTART, RLENGTH-1); exit } }")"
+      if [[ -n "$current" && "$current" != "$original" ]]; then
+        wpctl set-default "$original" || true
+        exit 0
+      fi
+    done
+  ' _ "$sink_id"

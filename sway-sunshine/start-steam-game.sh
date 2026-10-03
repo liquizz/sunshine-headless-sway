@@ -1,41 +1,52 @@
-#!/bin/bash
-# Launches a Steam game in the headless Sway session
-# Usage: start-steam-game.sh <appid|bigpicture|0>
-# Migrates Steam from the main desktop if it's running there
+#!/usr/bin/env bash
+set -euo pipefail
 
-APPID="$1"
-SWAYSOCK="/run/user/$(id -u)/sway-sunshine.sock"
-export SWAYSOCK
+app_id="${1:-}"
+steam_bin="${STEAM_BIN:-steam}"
+sway_socket="${SWAYSOCK:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sway-sunshine.sock}"
+headless_display="${WAYLAND_DISPLAY:-wayland-1}"
+stream_sink="${PULSE_SINK:-sunshine_headless_audio}"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+was_running_marker="$runtime_dir/sunshine-headless-steam-was-running"
+active_marker="$runtime_dir/sunshine-headless-steam-active"
 
-if [ -z "$APPID" ]; then
-    echo "Usage: $0 <steam_appid|bigpicture|0>"
-    exit 1
+if [[ "$app_id" != "bigpicture" && ! "$app_id" =~ ^[0-9]+$ ]]; then
+  echo "Usage: $0 <Steam app ID|bigpicture|0>" >&2
+  exit 2
+fi
+if ! command -v "$steam_bin" >/dev/null 2>&1; then
+  echo "Steam command '$steam_bin' was not found" >&2
+  exit 127
 fi
 
-# Shut down any running Steam instance
-if pgrep -x steam > /dev/null 2>&1; then
-    steam -shutdown 2>/dev/null
-    # Wait for graceful shutdown
-    for i in $(seq 1 15); do
-        pgrep -x steam > /dev/null 2>&1 || break
-        sleep 1
-    done
-    # Force kill only if still running
-    if pgrep -x steam > /dev/null 2>&1; then
-        pkill -x steam 2>/dev/null
-        sleep 2
-    fi
+rm -f "$was_running_marker"
+touch "$active_marker"
+
+# Steam enforces one client instance per user. Move an existing GNOME Steam
+# process into the streaming compositor, then return it to GNOME on disconnect.
+if pgrep -x steam >/dev/null 2>&1; then
+  touch "$was_running_marker"
+  "$steam_bin" -shutdown >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    pgrep -x steam >/dev/null 2>&1 || break
+    sleep 1
+  done
+  if pgrep -x steam >/dev/null 2>&1; then
+    pkill -TERM -x steam 2>/dev/null || true
+    sleep 2
+  fi
 fi
 
-# Clean up Steam IPC to prevent instance detection
-rm -f ~/.steam/steam.pid 2>/dev/null
-rm -f /tmp/steam_singleton_* 2>/dev/null
+rm -f "$HOME/.steam/steam.pid" "$HOME/.local/share/Steam/steam.pid" /tmp/steam_singleton_*
+sleep 3
 
-# Launch Steam in the headless Sway session
-if [ "$APPID" = "bigpicture" ]; then
-    swaymsg exec "steam steam://open/bigpicture"
-elif [ "$APPID" = "0" ]; then
-    swaymsg exec steam
-else
-    swaymsg exec "steam -applaunch $APPID"
-fi
+steam_env=$(printf 'env WAYLAND_DISPLAY=%q PULSE_SINK=%q XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=sway %q' \
+  "$headless_display" "$stream_sink" "$steam_bin")
+
+case "$app_id" in
+  bigpicture) command="$steam_env steam://open/bigpicture" ;;
+  0) command="$steam_env" ;;
+  *) command="$steam_env -applaunch $app_id" ;;
+esac
+
+swaymsg -s "$sway_socket" exec "$command"

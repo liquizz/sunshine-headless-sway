@@ -6,11 +6,14 @@ Requires=sway-sunshine.service
 [Service]
 Type=simple
 Environment=WAYLAND_DISPLAY=wayland-1
-Environment=SWAYSOCK=/run/user/1000/sway-sunshine.sock
+Environment=SWAYSOCK=%t/sway-sunshine.sock
 Environment=XDG_SESSION_TYPE=wayland
 Environment=XDG_CURRENT_DESKTOP=sway
-ExecStartPre=/bin/sleep 2
-ExecStart=/usr/bin/sg input -c /usr/bin/sunshine
+Environment=SUNSHINE_MAIN_WAYLAND_DISPLAY=__MAIN_WAYLAND_DISPLAY__
+Environment=SUNSHINE_MAIN_DESKTOP=__MAIN_DESKTOP__
+ExecStartPre=/usr/bin/bash -c 'for i in {1..20}; do test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" && test -S "$SWAYSOCK" && exit 0; sleep 0.5; done; exit 1'
+ExecStart=/usr/bin/sunshine %h/.config/sunshine-headless/sunshine.conf
+ExecStop=%h/.config/sway-sunshine/stop-steam-game.sh
 Restart=on-failure
 RestartSec=5
 
