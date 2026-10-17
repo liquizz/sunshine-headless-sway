@@ -56,7 +56,7 @@
 
   <!-- Game audio -->
   <rect x="50" y="390" width="260" height="32" fill="#1a3a2a" rx="6" stroke="#2a5a3a" stroke-width="1"/>
-  <text x="66" y="411" fill="#66cc88" font-size="12">Audio → sink-sunshine-stereo</text>
+  <text x="66" y="411" fill="#66cc88" font-size="12">Audio → sunshine_headless_audio</text>
 
   <!-- Game video -->
   <rect x="50" y="430" width="260" height="32" fill="#1a3a2a" rx="6" stroke="#2a5a3a" stroke-width="1"/>
@@ -64,7 +64,7 @@
 
   <!-- Sunshine box -->
   <rect x="480" y="290" width="170" height="200" fill="#2a2a1a" rx="10" stroke="#5a5a2a" stroke-width="1.5"/>
-  <text x="565" y="320" text-anchor="middle" fill="#cccc44" font-size="11" font-weight="bold" letter-spacing="1">SUNSHINE</text>
+  <text x="565" y="320" text-anchor="middle" fill="#cccc44" font-size="11" font-weight="bold" letter-spacing="1">HEADLESS SUNSHINE</text>
   <text x="565" y="350" text-anchor="middle" fill="#ffffff" font-size="14" font-weight="600">Encoder</text>
   <text x="565" y="375" text-anchor="middle" fill="#aaaa66" font-size="11">H.264 / HEVC</text>
   <text x="565" y="395" text-anchor="middle" fill="#aaaa66" font-size="11">NVENC HW</text>

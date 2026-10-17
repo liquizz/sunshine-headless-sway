@@ -5,9 +5,13 @@ set -euo pipefail
 # https://github.com/daaaaan/sunshine-headless-sway
 
 SWAY_CONFIG_DIR="$HOME/.config/sway-sunshine"
-SUNSHINE_CONFIG_DIR="$HOME/.config/sunshine"
+SUNSHINE_CONFIG_DIR="$HOME/.config/sunshine-headless"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+USER_ID="$(id -u)"
+USER_NAME="$(id -un)"
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$USER_ID}"
+SUNSHINE_BASE_PORT="${SUNSHINE_HEADLESS_PORT:-48989}"
 
 echo "=== Headless Sway + Sunshine Installer ==="
 echo ""
@@ -16,10 +20,21 @@ echo ""
 install_pkg() {
     if command -v pacman &>/dev/null; then
         sudo pacman -S --needed --noconfirm "$@"
+    elif command -v dnf &>/dev/null; then
+        # These desktop dependencies come from Fedora repositories; do not let
+        # unrelated Sunshine repository metadata block their installation.
+        local -a skip_repos=()
+        local repo
+        for repo in lizardbyte-stable lizardbyte-stable-source; do
+            if dnf repolist --all 2>/dev/null | awk '{print $1}' | grep -qx "$repo"; then
+                skip_repos+=("--disablerepo=$repo")
+            fi
+        done
+        sudo dnf install -y "${skip_repos[@]}" "$@"
     elif command -v apt &>/dev/null; then
         sudo apt install -y "$@"
     else
-        echo "Error: No supported package manager found (pacman or apt)"
+        echo "Error: No supported package manager found (pacman, dnf, or apt)"
         exit 1
     fi
 }
@@ -27,6 +42,8 @@ install_pkg() {
 is_pkg_installed() {
     if command -v pacman &>/dev/null; then
         pacman -Qi "$1" &>/dev/null
+    elif command -v dnf &>/dev/null; then
+        rpm -q "$1" &>/dev/null
     elif command -v dpkg &>/dev/null; then
         dpkg -s "$1" &>/dev/null 2>&1
     else
@@ -35,10 +52,19 @@ is_pkg_installed() {
 }
 
 # Install dependencies
-for cmd in sway swaybg; do
+if ! command -v pactl &>/dev/null; then
+    echo "Installing the pactl client needed to preserve the host audio output..."
+    if command -v pacman &>/dev/null; then
+        install_pkg libpulse
+    else
+        install_pkg pulseaudio-utils
+    fi
+fi
+
+for cmd in sway swaybg foot; do
     if ! command -v "$cmd" &>/dev/null; then
-        echo "Installing sway and swaybg..."
-        install_pkg sway swaybg
+        echo "Installing Sway, its background helper, and terminal..."
+        install_pkg sway swaybg foot
         break
     fi
 done
@@ -113,94 +139,121 @@ fi
 
 echo "Using Sunshine at: $SUNSHINE_PATH"
 
-# Detect Wayland display for the headless session
-MAIN_WAYLAND=$(ls /run/user/$(id -u)/wayland-* 2>/dev/null | grep -v lock | sort | tail -1 | xargs basename)
-if [ "$MAIN_WAYLAND" = "wayland-0" ]; then
-    HEADLESS_DISPLAY="wayland-1"
-else
-    HEADLESS_DISPLAY="wayland-$((${MAIN_WAYLAND##wayland-} + 1))"
+# Detect the active desktop's Wayland display and the first free socket for
+# Sway. wlroots chooses the first available wayland-N socket at startup.
+MAIN_WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+if [[ "$MAIN_WAYLAND_DISPLAY" == /* ]]; then
+    MAIN_WAYLAND_DISPLAY="$(basename "$MAIN_WAYLAND_DISPLAY")"
 fi
-echo "Main display: $MAIN_WAYLAND, headless will be: $HEADLESS_DISPLAY"
+MAIN_DESKTOP="${XDG_CURRENT_DESKTOP:-GNOME}"
+HEADLESS_INDEX=0
+HEADLESS_DISPLAY=""
+# On a re-run the live headless Sway owns its socket; keep that name instead of
+# picking the next free one, which wlroots would not reuse after a restart.
+if systemctl --user is-active --quiet sway-sunshine.service 2>/dev/null \
+    && [[ -f "$SYSTEMD_DIR/sway-sunshine.service" ]]; then
+    HEADLESS_DISPLAY="$(grep -oE 'wayland-[0-9]+' "$SYSTEMD_DIR/sway-sunshine.service" | head -n1 || true)"
+fi
+while [[ -z "$HEADLESS_DISPLAY" ]] && [[ -e "$XDG_RUNTIME_DIR/wayland-$HEADLESS_INDEX" || -e "$XDG_RUNTIME_DIR/wayland-$HEADLESS_INDEX.lock" ]]; do
+    HEADLESS_INDEX=$((HEADLESS_INDEX + 1))
+done
+[[ -n "$HEADLESS_DISPLAY" ]] || HEADLESS_DISPLAY="wayland-$HEADLESS_INDEX"
 
-# Detect UID for socket paths
-USER_ID=$(id -u)
-SOCKET_PATH="/run/user/$USER_ID/sway-sunshine.sock"
+if ! [[ "$SUNSHINE_BASE_PORT" =~ ^[0-9]+$ ]] || (( SUNSHINE_BASE_PORT < 1029 || SUNSHINE_BASE_PORT > 65514 )); then
+    echo "Error: SUNSHINE_HEADLESS_PORT must be between 1029 and 65514"
+    exit 1
+fi
+
+echo "Main display: $MAIN_WAYLAND_DISPLAY ($MAIN_DESKTOP), headless will be: $HEADLESS_DISPLAY"
+echo "Headless Sunshine uses base port $SUNSHINE_BASE_PORT (Web UI port $((SUNSHINE_BASE_PORT + 1)))."
 
 echo ""
 echo "Installing config files..."
 
 # Sway config
 mkdir -p "$SWAY_CONFIG_DIR"
-cp "$SCRIPT_DIR/sway-sunshine/config" "$SWAY_CONFIG_DIR/config"
+cp "$SCRIPT_DIR/sway-sunshine/defaults.env" "$SWAY_CONFIG_DIR/defaults.env"
+# shellcheck source=sway-sunshine/defaults.env
+source "$SCRIPT_DIR/sway-sunshine/defaults.env"
+sed "s|__DEFAULT_MODE__|${DEFAULT_WIDTH}x${DEFAULT_HEIGHT}@${DEFAULT_FPS}Hz|" \
+    "$SCRIPT_DIR/sway-sunshine/config" > "$SWAY_CONFIG_DIR/config"
 
-# Resolution scripts (template the user ID into them)
-sed "s|/run/user/1000/|/run/user/$USER_ID/|g" \
-    "$SCRIPT_DIR/sway-sunshine/set-resolution.sh" > "$SWAY_CONFIG_DIR/set-resolution.sh"
-sed "s|/run/user/1000/|/run/user/$USER_ID/|g" \
-    "$SCRIPT_DIR/sway-sunshine/reset-resolution.sh" > "$SWAY_CONFIG_DIR/reset-resolution.sh"
-cp "$SCRIPT_DIR/sway-sunshine/restore-default-sink.sh" "$SWAY_CONFIG_DIR/restore-default-sink.sh"
-chmod +x "$SWAY_CONFIG_DIR/set-resolution.sh"
-chmod +x "$SWAY_CONFIG_DIR/reset-resolution.sh"
-chmod +x "$SWAY_CONFIG_DIR/restore-default-sink.sh"
+cp "$SCRIPT_DIR/sway-sunshine/set-resolution.sh" "$SWAY_CONFIG_DIR/set-resolution.sh"
+cp "$SCRIPT_DIR/sway-sunshine/reset-resolution.sh" "$SWAY_CONFIG_DIR/reset-resolution.sh"
+cp "$SCRIPT_DIR/sway-sunshine/protect-host-audio.sh" "$SWAY_CONFIG_DIR/protect-host-audio.sh"
+cp "$SCRIPT_DIR/sway-sunshine/start-steam-game.sh" "$SWAY_CONFIG_DIR/start-steam-game.sh"
+cp "$SCRIPT_DIR/sway-sunshine/stop-steam-game.sh" "$SWAY_CONFIG_DIR/stop-steam-game.sh"
+chmod +x "$SWAY_CONFIG_DIR"/*.sh
 
-# Sunshine config (only if not already configured)
-mkdir -p "$SUNSHINE_CONFIG_DIR"
+# Keep all state for the second Sunshine process separate from the user's
+# normal ~/.config/sunshine installation (pairings, certs, app list, and logs).
+mkdir -p "$SUNSHINE_CONFIG_DIR/credentials"
 if [ ! -f "$SUNSHINE_CONFIG_DIR/sunshine.conf" ]; then
-    cp "$SCRIPT_DIR/sunshine/sunshine.conf" "$SUNSHINE_CONFIG_DIR/sunshine.conf"
+    sed -e "s|/home/YOUR_USER|$HOME|g" \
+        -e "s|port = 48989|port = $SUNSHINE_BASE_PORT|g" \
+        "$SCRIPT_DIR/sunshine/sunshine.conf" > "$SUNSHINE_CONFIG_DIR/sunshine.conf"
     echo "Created sunshine.conf"
-elif ! grep -q "^audio_sink" "$SUNSHINE_CONFIG_DIR/sunshine.conf"; then
-    # Migrate old 'sink' option if present
-    if grep -q "^sink " "$SUNSHINE_CONFIG_DIR/sunshine.conf"; then
-        sed -i 's/^sink = /audio_sink = /' "$SUNSHINE_CONFIG_DIR/sunshine.conf"
-        echo "Migrated 'sink' to 'audio_sink' in existing sunshine.conf"
-    else
-        echo "audio_sink = sink-sunshine-stereo" >> "$SUNSHINE_CONFIG_DIR/sunshine.conf"
-        echo "Added audio_sink to existing sunshine.conf"
-    fi
-    if ! grep -q "^capture" "$SUNSHINE_CONFIG_DIR/sunshine.conf"; then
-        echo "capture = wlr" >> "$SUNSHINE_CONFIG_DIR/sunshine.conf"
-        echo "Added capture = wlr to sunshine.conf"
-    fi
 else
-    echo "sunshine.conf already configured, skipping"
+    echo "Existing headless Sunshine config preserved: $SUNSHINE_CONFIG_DIR/sunshine.conf"
 fi
 
 # Apps config (only if not already present)
 if [ ! -f "$SUNSHINE_CONFIG_DIR/apps.json" ]; then
-    sed "s|/home/YOUR_USER/|$HOME/|g" \
+    sed -e "s|/home/YOUR_USER|$HOME|g" \
+        -e "s|/run/user/1000|$XDG_RUNTIME_DIR|g" \
+        -e "s|wayland-1|$HEADLESS_DISPLAY|g" \
         "$SCRIPT_DIR/sunshine/apps.json" > "$SUNSHINE_CONFIG_DIR/apps.json"
     echo "Created apps.json"
 else
-    echo "apps.json already exists, skipping (see sunshine/apps.json for reference)"
+    echo "apps.json already exists, preserving custom apps. Add the audio-guard prep command from sunshine/apps.json to each app to protect host audio."
 fi
 
 # Systemd services
 mkdir -p "$SYSTEMD_DIR"
 
-sed -e "s|/run/user/1000/|/run/user/$USER_ID/|g" \
+sed -e "s|/run/user/1000|$XDG_RUNTIME_DIR|g" \
+    -e "s|wayland-1|$HEADLESS_DISPLAY|g" \
     "$SCRIPT_DIR/systemd/sway-sunshine.service" > "$SYSTEMD_DIR/sway-sunshine.service"
 
-sed -e "s|WAYLAND_DISPLAY=wayland-1|WAYLAND_DISPLAY=$HEADLESS_DISPLAY|g" \
-    -e "s|/run/user/1000/|/run/user/$USER_ID/|g" \
-    -e "s|ExecStart=.*|ExecStart=$SUNSHINE_PATH|g" \
+sed -e "s|/run/user/1000|$XDG_RUNTIME_DIR|g" \
+    -e "s|wayland-1|$HEADLESS_DISPLAY|g" \
+    -e "s|__MAIN_WAYLAND_DISPLAY__|$MAIN_WAYLAND_DISPLAY|g" \
+    -e "s|__MAIN_DESKTOP__|$MAIN_DESKTOP|g" \
+    -e "s|ExecStart=.*|ExecStart=$SUNSHINE_PATH %h/.config/sunshine-headless/sunshine.conf|g" \
     "$SCRIPT_DIR/systemd/sunshine-headless.service" > "$SYSTEMD_DIR/sunshine-headless.service"
 
+cp "$SCRIPT_DIR/systemd/sunshine-audio-guard.service" "$SYSTEMD_DIR/sunshine-audio-guard.service"
+
 # PipeWire persistent null sink (survives Moonlight disconnect)
+PIPEWIRE_CHANGED=0
 PIPEWIRE_DIR="$HOME/.config/pipewire/pipewire.conf.d"
 mkdir -p "$PIPEWIRE_DIR"
+if ! cmp -s "$SCRIPT_DIR/pipewire/sunshine-null-sink.conf" "$PIPEWIRE_DIR/sunshine-null-sink.conf" 2>/dev/null; then
+    PIPEWIRE_CHANGED=1
+fi
 cp "$SCRIPT_DIR/pipewire/sunshine-null-sink.conf" "$PIPEWIRE_DIR/sunshine-null-sink.conf"
-echo "Installed PipeWire persistent audio sink"
+echo "Installed PipeWire persistent audio sink (sunshine_headless_audio)"
 
 # udev rule: install DE-appropriate input isolation rule
 UDEV_RULE="85-sunshine-input-isolation.rules"
 if [ "$DETECTED_DE" = "gnome" ]; then
-    sudo cp "$SCRIPT_DIR/udev/85-sunshine-input-isolation-gnome.rules" "/etc/udev/rules.d/$UDEV_RULE"
+    UDEV_TEMPLATE="$SCRIPT_DIR/udev/85-sunshine-input-isolation-gnome.rules"
     echo "Installed GNOME input isolation rule (mutter-device-ignore)"
 else
-    sudo cp "$SCRIPT_DIR/udev/85-sunshine-input-isolation-kde.rules" "/etc/udev/rules.d/$UDEV_RULE"
+    UDEV_TEMPLATE="$SCRIPT_DIR/udev/85-sunshine-input-isolation-kde.rules"
     echo "Installed KDE input isolation rule (ID_INPUT stripping)"
 fi
+TEMP_UDEV_RULE="$(mktemp)"
+sed "s|__USER__|$USER_NAME|g" "$UDEV_TEMPLATE" > "$TEMP_UDEV_RULE"
+sudo install -o root -g root -m 0644 "$TEMP_UDEV_RULE" "/etc/udev/rules.d/$UDEV_RULE"
+rm -f "$TEMP_UDEV_RULE"
 sudo udevadm control --reload-rules
+
+# Load the persistent stream sink into the running PipeWire graph.
+# Restarting drops host audio, so only do it when the sink is not yet loaded.
+if (( PIPEWIRE_CHANGED )) || ! pactl list short sinks 2>/dev/null | awk '$2 == "sunshine_headless_audio" { f = 1 } END { exit !f }'; then
+    systemctl --user restart pipewire.service
+fi
 
 echo "Installed systemd services"
 
@@ -212,10 +265,10 @@ systemctl --user enable sunshine-headless.service
 echo ""
 echo "=== Installation complete ==="
 echo ""
-echo "Desktop environment: $([ "$DETECTED_DE" = "gnome" ] && echo "GNOME" || echo "KDE/Other")"
+echo "Desktop environment: $DETECTED_DE"
 echo ""
 echo "To start streaming now:"
-echo "  systemctl --user start sway-sunshine.service"
+echo "  systemctl --user start sway-sunshine.service sunshine-headless.service"
 echo ""
 echo "To check status:"
 echo "  systemctl --user status sway-sunshine sunshine-headless"
@@ -223,11 +276,12 @@ echo ""
 echo "To add Steam games to Moonlight, edit:"
 echo "  $SUNSHINE_CONFIG_DIR/apps.json"
 echo ""
-echo "Pair with Moonlight at: https://$(hostname):47990"
+echo "If discovery does not show the second instance, add it manually in Moonlight as HOST_IP:$SUNSHINE_BASE_PORT"
+echo "Headless Sunshine Web UI: https://localhost:$((SUNSHINE_BASE_PORT + 1))"
 echo ""
 
 read -rp "Start the services now? [Y/n] " START
 if [[ "${START:-Y}" =~ ^[Yy]?$ ]]; then
-    systemctl --user start sway-sunshine.service
+    systemctl --user start sway-sunshine.service sunshine-headless.service
     echo "Services started. Open Moonlight to connect."
 fi

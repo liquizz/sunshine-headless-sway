@@ -1,16 +1,18 @@
 {
   "env": {
     "PATH": "$(PATH):$(HOME)/.local/bin",
+    "WAYLAND_DISPLAY": "wayland-1",
+    "PULSE_SINK": "sunshine_headless_audio",
     "SWAYSOCK": "/run/user/1000/sway-sunshine.sock"
   },
   "apps": [
     {
-      "name": "Desktop",
+      "name": "Headless Desktop",
       "image-path": "desktop.png",
       "prep-cmd": [
         {
-          "do": "/home/YOUR_USER/.config/sway-sunshine/restore-default-sink.sh",
-          "undo": ""
+          "do": "systemctl --user start sunshine-audio-guard.service",
+          "undo": "systemctl --user stop sunshine-audio-guard.service"
         },
         {
           "do": "/home/YOUR_USER/.config/sway-sunshine/set-resolution.sh",
@@ -19,14 +21,14 @@
       ]
     },
     {
-      "name": "Steam Big Picture",
+      "name": "Steam Big Picture (Headless)",
       "detached": [
         "/home/YOUR_USER/.config/sway-sunshine/start-steam-game.sh bigpicture"
       ],
       "prep-cmd": [
         {
-          "do": "/home/YOUR_USER/.config/sway-sunshine/restore-default-sink.sh",
-          "undo": ""
+          "do": "systemctl --user start sunshine-audio-guard.service",
+          "undo": "systemctl --user stop sunshine-audio-guard.service"
         },
         {
           "do": "/home/YOUR_USER/.config/sway-sunshine/set-resolution.sh",
@@ -36,14 +38,14 @@
       "image-path": "steam.png"
     },
     {
-      "name": "Steam",
+      "name": "Steam (Headless)",
       "detached": [
         "/home/YOUR_USER/.config/sway-sunshine/start-steam-game.sh 0"
       ],
       "prep-cmd": [
         {
-          "do": "/home/YOUR_USER/.config/sway-sunshine/restore-default-sink.sh",
-          "undo": ""
+          "do": "systemctl --user start sunshine-audio-guard.service",
+          "undo": "systemctl --user stop sunshine-audio-guard.service"
         },
         {
           "do": "/home/YOUR_USER/.config/sway-sunshine/set-resolution.sh",
