@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=defaults.env
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/defaults.env"
+
 steam_bin="${STEAM_BIN:-steam}"
 sway_socket="${SWAYSOCK:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sway-sunshine.sock}"
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -24,7 +27,7 @@ fi
 
 rm -f "$HOME/.steam/steam.pid" "$HOME/.local/share/Steam/steam.pid" /tmp/steam_singleton_*
 rm -f "$active_marker"
-swaymsg -s "$sway_socket" "output HEADLESS-1 mode 1280x800@90Hz" >/dev/null 2>&1 || true
+swaymsg -s "$sway_socket" "output HEADLESS-1 mode ${DEFAULT_WIDTH}x${DEFAULT_HEIGHT}@${DEFAULT_FPS}Hz" >/dev/null 2>&1 || true
 
 if [[ -e "$was_running_marker" ]]; then
   rm -f "$was_running_marker"

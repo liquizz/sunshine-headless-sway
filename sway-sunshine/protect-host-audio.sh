@@ -2,6 +2,7 @@
 set -uo pipefail
 
 last_host_sink=""
+stream_sink="sunshine_headless_audio"
 
 get_default_sink() {
     pactl get-default-sink 2>/dev/null || true
@@ -45,6 +46,7 @@ handle_default_sink_change() {
             pactl set-default-sink "$last_host_sink" || return 0
             move_streams_off_sunshine_sinks
             ;;
+        "$stream_sink") ;;
         *)
             last_host_sink="$current_sink"
             ;;
@@ -56,7 +58,7 @@ handle_default_sink_change() {
 # selecting one of its own virtual sinks, including on Moonlight reconnects.
 for _ in {1..30}; do
     current_sink="$(get_default_sink)"
-    if [[ -n "$current_sink" && "$current_sink" != sink-sunshine-* ]]; then
+    if [[ -n "$current_sink" && "$current_sink" != sink-sunshine-* && "$current_sink" != "$stream_sink" ]]; then
         last_host_sink="$current_sink"
         break
     fi

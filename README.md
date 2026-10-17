@@ -375,10 +375,10 @@ headless instance's **PIN** page.
 │   └── sunshine-null-sink.conf # Persistent sunshine_headless_audio sink
 ├── sway-sunshine/
 │   ├── config                  # Headless Sway compositor config (input isolation)
+│   ├── defaults.env            # Default output mode (width/height/fps)
 │   ├── set-resolution.sh       # Dynamic resolution on connect
 │   ├── reset-resolution.sh     # Reset resolution on disconnect
 │   ├── protect-host-audio.sh  # Restores GNOME output if Sunshine switches it, including on reconnect
-│   ├── restore-default-sink.sh # Legacy one-shot restore helper
 │   ├── start-steam-game.sh     # Moves an existing Steam client into headless Sway
 │   └── stop-steam-game.sh      # Stops stream Steam and restores it to the host desktop
 ├── sunshine-headless/

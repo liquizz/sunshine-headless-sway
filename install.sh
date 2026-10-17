@@ -23,10 +23,14 @@ install_pkg() {
     elif command -v dnf &>/dev/null; then
         # These desktop dependencies come from Fedora repositories; do not let
         # unrelated Sunshine repository metadata block their installation.
-        sudo dnf install -y \
-            --disablerepo=lizardbyte-stable \
-            --disablerepo=lizardbyte-stable-source \
-            "$@"
+        local -a skip_repos=()
+        local repo
+        for repo in lizardbyte-stable lizardbyte-stable-source; do
+            if dnf repolist --all 2>/dev/null | awk '{print $1}' | grep -qx "$repo"; then
+                skip_repos+=("--disablerepo=$repo")
+            fi
+        done
+        sudo dnf install -y "${skip_repos[@]}" "$@"
     elif command -v apt &>/dev/null; then
         sudo apt install -y "$@"
     else
@@ -143,10 +147,17 @@ if [[ "$MAIN_WAYLAND_DISPLAY" == /* ]]; then
 fi
 MAIN_DESKTOP="${XDG_CURRENT_DESKTOP:-GNOME}"
 HEADLESS_INDEX=0
-while [[ -e "$XDG_RUNTIME_DIR/wayland-$HEADLESS_INDEX" || -e "$XDG_RUNTIME_DIR/wayland-$HEADLESS_INDEX.lock" ]]; do
+HEADLESS_DISPLAY=""
+# On a re-run the live headless Sway owns its socket; keep that name instead of
+# picking the next free one, which wlroots would not reuse after a restart.
+if systemctl --user is-active --quiet sway-sunshine.service 2>/dev/null \
+    && [[ -f "$SYSTEMD_DIR/sway-sunshine.service" ]]; then
+    HEADLESS_DISPLAY="$(grep -oE 'wayland-[0-9]+' "$SYSTEMD_DIR/sway-sunshine.service" | head -n1 || true)"
+fi
+while [[ -z "$HEADLESS_DISPLAY" ]] && [[ -e "$XDG_RUNTIME_DIR/wayland-$HEADLESS_INDEX" || -e "$XDG_RUNTIME_DIR/wayland-$HEADLESS_INDEX.lock" ]]; do
     HEADLESS_INDEX=$((HEADLESS_INDEX + 1))
 done
-HEADLESS_DISPLAY="wayland-$HEADLESS_INDEX"
+[[ -n "$HEADLESS_DISPLAY" ]] || HEADLESS_DISPLAY="wayland-$HEADLESS_INDEX"
 
 if ! [[ "$SUNSHINE_BASE_PORT" =~ ^[0-9]+$ ]] || (( SUNSHINE_BASE_PORT < 1029 || SUNSHINE_BASE_PORT > 65514 )); then
     echo "Error: SUNSHINE_HEADLESS_PORT must be between 1029 and 65514"
@@ -161,11 +172,14 @@ echo "Installing config files..."
 
 # Sway config
 mkdir -p "$SWAY_CONFIG_DIR"
-cp "$SCRIPT_DIR/sway-sunshine/config" "$SWAY_CONFIG_DIR/config"
+cp "$SCRIPT_DIR/sway-sunshine/defaults.env" "$SWAY_CONFIG_DIR/defaults.env"
+# shellcheck source=sway-sunshine/defaults.env
+source "$SCRIPT_DIR/sway-sunshine/defaults.env"
+sed "s|__DEFAULT_MODE__|${DEFAULT_WIDTH}x${DEFAULT_HEIGHT}@${DEFAULT_FPS}Hz|" \
+    "$SCRIPT_DIR/sway-sunshine/config" > "$SWAY_CONFIG_DIR/config"
 
 cp "$SCRIPT_DIR/sway-sunshine/set-resolution.sh" "$SWAY_CONFIG_DIR/set-resolution.sh"
 cp "$SCRIPT_DIR/sway-sunshine/reset-resolution.sh" "$SWAY_CONFIG_DIR/reset-resolution.sh"
-cp "$SCRIPT_DIR/sway-sunshine/restore-default-sink.sh" "$SWAY_CONFIG_DIR/restore-default-sink.sh"
 cp "$SCRIPT_DIR/sway-sunshine/protect-host-audio.sh" "$SWAY_CONFIG_DIR/protect-host-audio.sh"
 cp "$SCRIPT_DIR/sway-sunshine/start-steam-game.sh" "$SWAY_CONFIG_DIR/start-steam-game.sh"
 cp "$SCRIPT_DIR/sway-sunshine/stop-steam-game.sh" "$SWAY_CONFIG_DIR/stop-steam-game.sh"
@@ -211,8 +225,12 @@ sed -e "s|/run/user/1000|$XDG_RUNTIME_DIR|g" \
 cp "$SCRIPT_DIR/systemd/sunshine-audio-guard.service" "$SYSTEMD_DIR/sunshine-audio-guard.service"
 
 # PipeWire persistent null sink (survives Moonlight disconnect)
+PIPEWIRE_CHANGED=0
 PIPEWIRE_DIR="$HOME/.config/pipewire/pipewire.conf.d"
 mkdir -p "$PIPEWIRE_DIR"
+if ! cmp -s "$SCRIPT_DIR/pipewire/sunshine-null-sink.conf" "$PIPEWIRE_DIR/sunshine-null-sink.conf" 2>/dev/null; then
+    PIPEWIRE_CHANGED=1
+fi
 cp "$SCRIPT_DIR/pipewire/sunshine-null-sink.conf" "$PIPEWIRE_DIR/sunshine-null-sink.conf"
 echo "Installed PipeWire persistent audio sink (sunshine_headless_audio)"
 
@@ -232,7 +250,10 @@ rm -f "$TEMP_UDEV_RULE"
 sudo udevadm control --reload-rules
 
 # Load the persistent stream sink into the running PipeWire graph.
-systemctl --user restart pipewire.service
+# Restarting drops host audio, so only do it when the sink is not yet loaded.
+if (( PIPEWIRE_CHANGED )) || ! pactl list short sinks 2>/dev/null | awk '$2 == "sunshine_headless_audio" { f = 1 } END { exit !f }'; then
+    systemctl --user restart pipewire.service
+fi
 
 echo "Installed systemd services"
 

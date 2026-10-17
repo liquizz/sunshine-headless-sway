@@ -1,9 +1,9 @@
 # Headless Sway session for Sunshine streaming
 # No physical display needed - uses WLR_BACKENDS=headless
 
-# Steam Deck OLED native size/refresh. Sunshine prep commands adapt this to the
+# Default size/refresh comes from defaults.env (substituted by install.sh). Sunshine prep commands adapt this to the
 # Moonlight client's requested mode while a stream is active.
-output HEADLESS-1 resolution 1280x800@90Hz
+output HEADLESS-1 resolution __DEFAULT_MODE__
 
 # Performance tuning
 output * allow_tearing yes

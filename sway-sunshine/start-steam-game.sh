@@ -19,13 +19,19 @@ if ! command -v "$steam_bin" >/dev/null 2>&1; then
   exit 127
 fi
 
-rm -f "$was_running_marker"
+# A second launch inside an active session must not re-record the headless
+# Steam as if it had been the user's desktop Steam.
+already_active=0
+[[ -e "$active_marker" ]] && already_active=1
+if (( ! already_active )); then
+  rm -f "$was_running_marker"
+fi
 touch "$active_marker"
 
 # Steam enforces one client instance per user. Move an existing GNOME Steam
 # process into the streaming compositor, then return it to GNOME on disconnect.
 if pgrep -x steam >/dev/null 2>&1; then
-  touch "$was_running_marker"
+  (( already_active )) || touch "$was_running_marker"
   "$steam_bin" -shutdown >/dev/null 2>&1 || true
   for _ in {1..20}; do
     pgrep -x steam >/dev/null 2>&1 || break
